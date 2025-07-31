@@ -45,7 +45,7 @@ typedef struct {
   //
   // If set to FRAME_END_POSITION, then the current frame was completely sent
   // and the connection should suspend until the next frame is available.
-  ssize_t frame_start_pos;  // TODO: Protect with a mutex.
+  ssize_t frame_start_pos;
 } connection_ctx_t;
 
 // Internal bookkeeping state for the HTTP server.
@@ -104,8 +104,12 @@ static ssize_t response_callback(void* ctx, uint64_t pos,
     return MHD_CONTENT_READER_END_OF_STREAM;
   }
 
-  if (ctx_internal->frame_size == 0 ||
-      connection_ctx->frame_start_pos == FRAME_END_POSITION) {
+  pthread_mutex_lock(&ctx_internal->image_buffer_mutex);
+  ssize_t current_frame_size = ctx_internal->frame_size;
+  pthread_mutex_unlock(&ctx_internal->image_buffer_mutex);
+  
+  ssize_t current_frame_pos = __sync_fetch_and_add(&connection_ctx->frame_start_pos, 0);
+  if (current_frame_size == 0 || current_frame_pos == FRAME_END_POSITION) {
 #ifdef DEBUG
     fprintf(stderr, "Received end of frame on connection %ld, suspending\n",
             connection_ctx->id);
@@ -115,11 +119,11 @@ static ssize_t response_callback(void* ctx, uint64_t pos,
   }
 
   // If we're at the beginning of a frame, just send headers first.
-  if (connection_ctx->frame_start_pos == 0) {
+  if (current_frame_pos == 0) {
 #ifdef DEBUG
     fprintf(stderr, "Connection %ld Frame #%ld (%ld bytes)\n",
             connection_ctx->id, connection_ctx->frame_i,
-            ctx_internal->frame_size);
+            current_frame_size);
 #endif
 
     int res = snprintf(buf, max,
@@ -127,28 +131,28 @@ static ssize_t response_callback(void* ctx, uint64_t pos,
                        "Content-Type: image/jpeg\r\n"
                        "Content-Length: %ld\r\n\r\n",
                        connection_ctx->frame_i == 0 ? "--" BOUNDARY "\r\n" : "",
-                       ctx_internal->frame_size);
+                       current_frame_size);
     if (res < 0) {
       return MHD_CONTENT_READER_END_WITH_ERROR;
     }
-    connection_ctx->frame_start_pos = pos + res;
+    __sync_lock_test_and_set(&connection_ctx->frame_start_pos, pos + res);
     return res;
   }
 
   // If we're at the end of a frame, update state and send footer.
-  size_t frame_offset = pos - connection_ctx->frame_start_pos;
-  if (frame_offset >= ctx_internal->frame_size) {
+  size_t frame_offset = pos - current_frame_pos;
+  if (frame_offset >= current_frame_size) {
     int res = snprintf(buf, max, "\r\n--%s\r\n", BOUNDARY);
     if (res < 0) {
       return MHD_CONTENT_READER_END_WITH_ERROR;
     }
-    connection_ctx->frame_start_pos = FRAME_END_POSITION;
+    __sync_lock_test_and_set(&connection_ctx->frame_start_pos, FRAME_END_POSITION);
     connection_ctx->frame_i++;
     return res;
   }
 
   // Otherwise, attempt to send the entire image buffer data.
-  size_t size = MIN(ctx_internal->frame_size - frame_offset, max);
+  size_t size = MIN(current_frame_size - frame_offset, max);
   pthread_mutex_lock(&ctx_internal->image_buffer_mutex);
   memcpy(buf, ctx_internal->image_buffer + frame_offset, size);
   pthread_mutex_unlock(&ctx_internal->image_buffer_mutex);
@@ -322,7 +326,6 @@ int server_send_image(server_ctx_t ctx, uint8_t* buffer, size_t size) {
   pthread_mutex_lock(&ctx_internal->image_buffer_mutex);
   memcpy(ctx_internal->image_buffer, buffer, size);
   ctx_internal->frame_size = size;
-  pthread_mutex_unlock(&ctx_internal->image_buffer_mutex);
 
   for (int i = 0; i < MAX_NUM_CONNECTIONS; i++) {
     connection_ctx_t* connection_ctx = &ctx_internal->connections[i];
@@ -330,11 +333,12 @@ int server_send_image(server_ctx_t ctx, uint8_t* buffer, size_t size) {
       continue;  // Skip inactive connection contexts.
     }
 
-    if (connection_ctx->frame_start_pos != FRAME_END_POSITION) {
+    ssize_t old_pos = __sync_val_compare_and_swap(&connection_ctx->frame_start_pos, FRAME_END_POSITION, 0);
+    if (old_pos != FRAME_END_POSITION) {
       fprintf(stderr, "Sending frame before connection %ld is ready\n",
               connection_ctx->id);
+      __sync_lock_test_and_set(&connection_ctx->frame_start_pos, 0);
     }
-    connection_ctx->frame_start_pos = 0;
 
     const union MHD_ConnectionInfo* info;
     info = MHD_get_connection_info(connection_ctx->connection,
@@ -351,5 +355,6 @@ int server_send_image(server_ctx_t ctx, uint8_t* buffer, size_t size) {
 #endif
     }
   }
+  pthread_mutex_unlock(&ctx_internal->image_buffer_mutex);
   return 0;
 }
