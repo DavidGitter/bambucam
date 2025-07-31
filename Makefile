@@ -48,6 +48,8 @@ else
 	OBJECTS += server_ffmpeg_rtp.o
 endif
 
+CFLAGS += $(EXTRA_CFLAGS)
+
 bambucam: $(OBJECTS)
 
 .PHONY: clean
