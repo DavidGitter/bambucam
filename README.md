@@ -19,7 +19,7 @@ services:
       - "8082:8082" # the port number mapping where the video stream is serviced
 
     environment:
-    - DEVICE_IP: "192.168.168.172" # your printers ip
+    - DEVICE_IP="192.168.1.123" # your printers ip
     - DEVICE_ID="1A2B3C12345678" # your printer serial number (tho check if its the right device)
     - ACCESS_CODE="12345678" # your printer access code
     - PORT=8082 # the port number where the video stream should be serviced
