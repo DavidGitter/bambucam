@@ -30,7 +30,7 @@ services:
 ````
 
 ## Building the Image
-If you want to build the docker image for yourself, follow those steps:
+If you want to build the docker image by yourself, follow those steps:
 - clone this repo
 - create a folder "plugins"
 - put your "libBambuStudio.so" in there which is made available by Bambulab Software
