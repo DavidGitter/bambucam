@@ -1,5 +1,6 @@
 Bambu Cam
 =========
+Disclaimer: If you like the docker functionality and give this project a star, please consider checking out jtessler´s repo who made this possible creating this cli-tool.
 
 A simple wrapper around [Bambu Studio]'s `libBambuSource.so` prebuilt to access
 the camera frames from a 3D printer in LAN mode and, encode it, and serve a
